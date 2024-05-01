@@ -31,30 +31,29 @@ mongoose
 app.post("/register", async (request, response) => {
     const { username, password } = request.body;
     if (password.length <= 4) {
-      response.status(400);
-      response.send({message:"password must contain more than 4 characters"});
-      process.exit(1);
+      return response.status(400).send({message:"password must contain more than 4 characters"});
     }
     const encryptedPassword = await bcrypt.hash(password, 10);
     const query1 = await User.findOne({username});
     console.log(query1);
     if (query1) {
-      response.send({ message: "User already registered", status: 200 });
-      response.status(200);
+      return response.status(200).send({ message: "User already registered", status: 200 });
     } else {
       const query2 = new User({username,password_hash:encryptedPassword});
       await query2.save();
-      response.status(200).send({ message: "user added successfully", status: 200 });
+      return response.status(200).send({ message: "user added successfully", status: 200 });
     }
   });
   //to get login
   app.post("/login", async (request, response) => {
     const { username, password } = request.body;
+    console.log(username,password);
+    if(username== undefined || password == undefined){
+      return response.status(400).send({message:"Username and password are required"})
+    }
     const query1 = await User.findOne({username});
-    console.log(query1);
     if (query1 === null) {
-      response.status(400);
-      response.send({ message: "Please register and Login" });
+      return response.status(400).send({ message: "Please register and Login" });
     }
     decryptPassword = await bcrypt.compare(password, query1.password_hash);
     if (decryptPassword) {
@@ -62,10 +61,9 @@ app.post("/register", async (request, response) => {
       console.log(payload);
       const jwtToken = await jwt.sign(payload, "secret_token");
       console.log(jwtToken);
-      response.send({ jwtToken });
+      return response.status(200).send({ jwtToken });
     } else {
-      response.status(400);
-      response.send("Invalid Password");
+      return response.status(401).send({"message":"Invalid Password"});
     }
   });
   //middleware function to authenticate the user
@@ -76,16 +74,14 @@ app.post("/register", async (request, response) => {
       jwtToken = authToken.split(" ")[1];
     }
     if (jwtToken === undefined) {
-      response.send({ error: "Unauthorized user" });
-      response.status(400);
+      return response.status(400).send({ error: "Unauthorized user" });
     } else {
       const valid = jwt.verify(
         jwtToken,
         "secret_token",
         async (error, payload) => {
           if (error) {
-            response.status(400);
-            response.send({ error: "Authentication failed" });
+            return response.status(400).send({ error: "Authentication failed" });
           } else {
             request.username = payload.username;
             console.log(payload);
@@ -96,20 +92,41 @@ app.post("/register", async (request, response) => {
     }
   };
 
+//To get The role of users
+
+const getUserRoles = (username) => {
+  if (username === "nagasritha") {
+      return ["admin"];
+  } else {
+      return ["user"]; // Default role for non-admin users
+  }
+};
+
+const isAdmin = (request, response, next) => {
+  const { username } = request;
+  const userRoles = getUserRoles(username);
+  if (userRoles.includes("admin")) {
+      next(); // User is authorized
+  } else {
+      response.status(403).json({ status: false, message: "Forbidden. Only admin can perform this operation." });
+  }
+};
+
+
 //task management
-app.post("/tasks",middleware,async (request,response)=>{
+app.post("/tasks",middleware, isAdmin, async (request,response)=>{
     try{
-    if(request.username !== "nagasritha"){
-        response.status(400).send({"message":"Only admin can add new tasks"});
-    }
     const { title, description, status, assignee_id, created_at } = request.body;
+    if(title == undefined || description == undefined || status == undefined || assignee_id == undefined || created_at == undefined ){
+      return response.status(400).send({message:"Required Fields"});
+    }
     let createdAt = new Date(created_at);
     const newTask = new Task({ title, description, status, assignee_id, created_at:createdAt });
     await newTask.save();
-    response.status(200).send({"status":true,"message":"Task Posted Successfully"});
+    return response.status(200).send({"status":true,"message":"Task Posted Successfully"});
 }catch(error){
     console.log(error);
-    response.status(400).send({"status":false,"message":error});
+    return response.status(400).send({"status":false,"message":error});
 }
 
 })
@@ -140,34 +157,43 @@ app.get("/tasks/:id", async (request, response) => {
         response.status(400).json({ status: false, message: error.message });
     }
 });
-app.put("/tasks/:id", middleware, async (request, response) => {
-    try {
-        if(request.username !== "nagasritha"){
-            response.status(400).send({"message":"Only admin can edit tasks"});
-        }
-        const { id } = request.params;
-        const { title, description, status, assignee_id, created_at } = request.body;
-        let createdAt = new Date(created_at);
-        const task = await Task.findOneAndUpdate({ _id: id },{title, description, status, assignee_id, created_at:createdAt});
+app.put("/tasks/:id",middleware,isAdmin, async (request, response) => {
+  try {
+      const { id } = request.params;
+      console.log("Task ID:", id);
+      
+      // Retrieve the task by ID
+      let query1 = await Task.findOne({_id: id});
+      console.log("Query Result:", query1);
+      
+      // Check if the task exists
+      if (!query1) {
+          return response.status(404).send({ status: false, message: 'Task not found' });
+      }
+      
+      // Extract task properties from request body
+      const { title, description, status, assignee_id, created_at } = request.body;
+      let createdAt = new Date(created_at);
+      
+      // Update the task
+      const task = await Task.findOneAndUpdate({ _id: id }, { title, description, status, assignee_id, created_at: createdAt });
 
-        if (!task) {
-            // If no task found with the given id, respond with a 404 status code
-            return response.status(404).json({ status: false, message: 'Task not updated' });
-        }
+      // Check if the task was updated
+      if (!task) {
+          return response.status(404).send({ status: false, message: 'Task not updated' });
+      }
 
-        // Respond with the found task
-        response.status(200).json({ status: true, message : "Task updated successfully" });
-    } catch (error) {
-        // If an error occurs, respond with a 400 status code and error message
-        response.status(400).json({ status: false, message: error.message });
-    }
+      // Respond with success message
+      return response.status(200).send({ status: true, message: "Task updated successfully" });
+  } catch (error) {
+      // If an error occurs, respond with a 400 status code and error message
+      return response.status(400).send({ status: false, message: error.message });
+  }
 });
 
-app.delete("/tasks/:id", middleware, async (request, response) => {
+
+app.delete("/tasks/:id", middleware, isAdmin, async (request, response) => {
     try {
-        if(request.username !== "nagasritha"){
-            response.status(400).send({"message":"Only admin can delete tasks"});
-        }
         const { id } = request.params;
         const task = await Task.findOneAndDelete({ _id: id });
 
@@ -183,3 +209,5 @@ app.delete("/tasks/:id", middleware, async (request, response) => {
         response.status(400).json({ status: false, message: error.message });
     }
 });
+
+module.exports = app;
